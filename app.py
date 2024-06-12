@@ -1,14 +1,28 @@
+import langchain
 import streamlit as st
 from dotenv import load_dotenv
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings, HuggingFaceInstructEmbeddings, HuggingFaceEmbeddings
+from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import FAISS
-from langchain.chat_models import ChatOpenAI
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationalRetrievalChain
+from langchain_openai import ChatOpenAI
+
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import MessagesPlaceholder
+
+from langchain.chains.history_aware_retriever import create_history_aware_retriever
+from langchain.chains.retrieval import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+
+from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
+
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
+
 from htmlTemplates import css, bot_template, user_template
-from langchain.llms import HuggingFaceHub
+
+State = st.session_state
 
 def get_pdf_text(pdf_docs):
     text = ""
@@ -37,31 +51,56 @@ def get_vectorstore(text_chunks):
     return vectorstore
 
 
-def get_conversation_chain(vectorstore):
-    llm = ChatOpenAI(model="chatglm3-6b", openai_api_base="http://127.0.0.1:8000/v1", openai_api_key="test")
-    # llm = HuggingFaceHub(repo_id="google/flan-t5-xxl", model_kwargs={"temperature":0.5, "max_length":512})
-
-    memory = ConversationBufferMemory(
-        memory_key='chat_history', return_messages=True)
-    conversation_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=vectorstore.as_retriever(),
-        memory=memory
+def get_retriever_chain(vectorstore: FAISS):
+    llm: ChatOpenAI = State.llm
+    retriever = vectorstore.as_retriever()
+    contextualize_q_system_prompt = (
+        "Given a chat history and the latest user question "
+        "which might reference context in the chat history, "
+        "formulate a standalone question which can be understood "
+        "without the chat history. Do NOT answer the question, "
+        "just reformulate it if needed and otherwise return it as is."
     )
-    return conversation_chain
+    prompt_search_query = ChatPromptTemplate.from_messages([
+        ("system", contextualize_q_system_prompt),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "{input}"),
+    ])
+    retriever_chain = create_history_aware_retriever(llm, retriever, prompt_search_query)
+    return retriever_chain
 
+def get_qa_chain():
+    llm: ChatOpenAI = State.llm
+    prompt_get_answer = ChatPromptTemplate.from_messages([
+        ("system", "Answer the user's questions based on the below context:\\n\\n{context}"),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human","{input}"),
+    ])
+    qa_chain = create_stuff_documents_chain(llm, prompt_get_answer)
+    return qa_chain
+
+def get_session_history(session_id: str) -> BaseChatMessageHistory:
+    if session_id not in State.store:
+        State.store[session_id] = ChatMessageHistory()
+    return State.store[session_id]
 
 def handle_userinput(user_question):
-    response = st.session_state.conversation({'question': user_question})
-    st.session_state.chat_history = response['chat_history']
+    sid = "sid"
+    State.conversation.invoke(
+        {"input": user_question},
+        config={
+            "configurable": {"session_id": sid}
+        }
+    )
 
-    for i, message in enumerate(st.session_state.chat_history):
-        if i % 2 == 0:
+    message: BaseMessage
+    for message in State.store[sid].messages:
+        if isinstance(message, AIMessage):
             st.write(user_template.replace(
-                "{{MSG}}", message.content), unsafe_allow_html=True)
-        else:
+                "{{MSG}}", str(message.content)), unsafe_allow_html=True)
+        elif isinstance(message, HumanMessage):
             st.write(bot_template.replace(
-                "{{MSG}}", message.content), unsafe_allow_html=True)
+                "{{MSG}}", str(message.content)), unsafe_allow_html=True)
 
 
 def main():
@@ -70,10 +109,15 @@ def main():
                        page_icon=":books:")
     st.write(css, unsafe_allow_html=True)
 
-    if "conversation" not in st.session_state:
-        st.session_state.conversation = None
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = None
+    if "conversation" not in State:
+        State.conversation = None
+    if "chat_history" not in State:
+        State.chat_history = None
+    if "llm" not in State:
+        State.llm = ChatOpenAI(model="chatglm3-6b", base_url="http://127.0.0.1:8000/v1")
+        # State.llm = HuggingFaceHub(repo_id="google/flan-t5-xxl", model_kwargs={"temperature":0.5, "max_length":512})
+    if "store" not in State:
+        State.store = {}
 
     st.header("Chat with multiple PDFs :books:")
     user_question = st.text_input("Ask a question about your documents:")
@@ -95,9 +139,19 @@ def main():
                 # create vector store
                 vectorstore = get_vectorstore(text_chunks)
 
-                # create conversation chain
-                st.session_state.conversation = get_conversation_chain(
-                    vectorstore)
+                # create retriever, qa, conversation chain
+                history_aware_chain = get_retriever_chain(vectorstore)
+                qa_chain = get_qa_chain()
+
+                rag_chain = create_retrieval_chain(history_aware_chain, qa_chain)
+                
+                State.conversation = RunnableWithMessageHistory(
+                    rag_chain,
+                    get_session_history,
+                    input_messages_key="input",
+                    history_messages_key="chat_history",
+                    output_messages_key="answer",
+                )
 
 
 if __name__ == '__main__':
