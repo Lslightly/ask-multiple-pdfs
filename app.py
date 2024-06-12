@@ -1,10 +1,11 @@
 import langchain
+from pydantic import SecretStr
 import streamlit as st
 from dotenv import load_dotenv
 from pypdf import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 from langchain_openai import ChatOpenAI
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -85,6 +86,12 @@ def get_session_history(session_id: str) -> BaseChatMessageHistory:
     return State.store[session_id]
 
 def handle_userinput(user_question):
+    if State.conversation is None:
+        st.write(
+            bot_template.replace("{{MSG}}", "Please first input some PDFs and then click the process button. It may also fail to load the model."),
+            unsafe_allow_html=True
+        )
+        return
     sid = "sid"
     State.conversation.invoke(
         {"input": user_question},
@@ -114,7 +121,7 @@ def main():
     if "chat_history" not in State:
         State.chat_history = None
     if "llm" not in State:
-        State.llm = ChatOpenAI(model="chatglm3-6b", base_url="http://127.0.0.1:8000/v1")
+        State.llm = ChatOpenAI(model="chatglm3-6b", base_url="http://127.0.0.1:8000/v1", api_key=SecretStr("test"))
         # State.llm = HuggingFaceHub(repo_id="google/flan-t5-xxl", model_kwargs={"temperature":0.5, "max_length":512})
     if "store" not in State:
         State.store = {}
@@ -132,6 +139,11 @@ def main():
             with st.spinner("Processing"):
                 # get pdf text
                 raw_text = get_pdf_text(pdf_docs)
+                if raw_text == "":
+                    st.write(
+                        "Please input some PDFs first."
+                    )
+                    return
 
                 # get the text chunks
                 text_chunks = get_text_chunks(raw_text)

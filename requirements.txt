@@ -1,6 +1,7 @@
 langchain==0.2.3
 langchain_openai==0.1.8
 langchain_community==0.2.4
+langchain-huggingface==0.0.3
 pypdf==4.2.0
 python-dotenv==1.0.0
 streamlit==1.18.1
