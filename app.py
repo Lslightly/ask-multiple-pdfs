@@ -109,10 +109,10 @@ def handle_userinput(user_question):
     message: BaseMessage
     for message in State.store[sid].messages:
         if isinstance(message, AIMessage):
-            st.write(user_template.replace(
+            st.write(bot_template.replace(
                 "{{MSG}}", str(message.content)), unsafe_allow_html=True)
         elif isinstance(message, HumanMessage):
-            st.write(bot_template.replace(
+            st.write(user_template.replace(
                 "{{MSG}}", str(message.content)), unsafe_allow_html=True)
 
 
