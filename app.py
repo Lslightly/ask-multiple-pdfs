@@ -72,8 +72,14 @@ def get_retriever_chain(vectorstore: FAISS):
 
 def get_qa_chain():
     llm: ChatOpenAI = State.llm
+    qa_system_prompt = """You are an assistant for question-answering tasks. \
+Use the following pieces of retrieved context to answer the question. \
+If you don't know the answer, just say that you don't know. \
+Use three sentences maximum and keep the answer concise.\
+
+{context}"""
     prompt_get_answer = ChatPromptTemplate.from_messages([
-        ("system", "Answer the user's questions based on the below context:\\n\\n{context}"),
+        ("system", qa_system_prompt),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human","{input}"),
     ])
@@ -121,7 +127,7 @@ def main():
     if "chat_history" not in State:
         State.chat_history = None
     if "llm" not in State:
-        State.llm = ChatOpenAI(model="chatglm3-6b", base_url="http://127.0.0.1:8000/v1", api_key=SecretStr("test"))
+        State.llm = ChatOpenAI(model="chatglm3-6b", base_url="http://127.0.0.1:8000/v1", api_key="test")
         # State.llm = HuggingFaceHub(repo_id="google/flan-t5-xxl", model_kwargs={"temperature":0.5, "max_length":512})
     if "store" not in State:
         State.store = {}
@@ -164,6 +170,8 @@ def main():
                     history_messages_key="chat_history",
                     output_messages_key="answer",
                 )
+
+                st.write("Process finished!")
 
 
 if __name__ == '__main__':
